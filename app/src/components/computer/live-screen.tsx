@@ -73,7 +73,11 @@ export function LiveScreen({ computerId, driving, onProblem }: Props) {
       // A frame that is not an object (`null`, a number, a string, an array) has
       // no `type` to read: reaching for it throws a `TypeError` inside this
       // handler and stops the live view from drawing further frames. Drop it.
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         return;
       }
       const message = parsed as {
