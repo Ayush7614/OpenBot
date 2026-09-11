@@ -13,6 +13,19 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 `POST /api/plugins/grants` and `POST /api/plugins/call` checked presence, not shape, so a JSON
 number, object, or whitespace string passed and failed inside the store as a 500. Refs and Bot
 ids must be non-empty strings now, and anything else is a 400 naming what is required.
+### A fractional or infinite snapshot id is refused as malformed, not stale
+
+A `snapshotId` of `1.5` or `Infinity` passed the acting routes and never matched the stored
+integer, so the answer was a 409 stale snapshot and the caller retried a request that was
+malformed. Non-integer ids are refused with a 400 naming the ref and its snapshot before any
+decision or audit row.
+### A `DATABASE_URL` with a port of zero is refused at start-up
+
+`postgres://…:0/…` parsed and booted, and every query then failed against a port nothing listens
+on. Ports outside 1-65535 are refused with a sentence naming `DATABASE_URL` before a socket is
+ever opened.
+
+### `bun run dev` no longer starts a routines worker that cannot start
 
 `bun run dev` fanned out across every workspace, and one of them is the routines worker. That worker
 is handed `DATABASE_URL`, `SERVER_INTERNAL_URL` and `WORKER_SHARED_SECRET` by `scripts/start.sh` and
