@@ -8,7 +8,12 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 
 ## Unreleased
 
-### `bun run dev` no longer starts a routines worker that cannot start
+### A fractional or infinite snapshot id is refused as malformed, not stale
+
+A `snapshotId` of `1.5` or `Infinity` passed the acting routes and never matched the stored
+integer, so the answer was a 409 stale snapshot and the caller retried a request that was
+malformed. Non-integer ids are refused with a 400 naming the ref and its snapshot before any
+decision or audit row.
 
 `bun run dev` fanned out across every workspace, and one of them is the routines worker. That worker
 is handed `DATABASE_URL`, `SERVER_INTERNAL_URL` and `WORKER_SHARED_SECRET` by `scripts/start.sh` and
