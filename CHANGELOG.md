@@ -8,7 +8,11 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 
 ## Unreleased
 
-### `bun run dev` no longer starts a routines worker that cannot start
+### A non-string plugin grant or tool call is refused before it reaches the store
+
+`POST /api/plugins/grants` and `POST /api/plugins/call` checked presence, not shape, so a JSON
+number, object, or whitespace string passed and failed inside the store as a 500. Refs and Bot
+ids must be non-empty strings now, and anything else is a 400 naming what is required.
 
 `bun run dev` fanned out across every workspace, and one of them is the routines worker. That worker
 is handed `DATABASE_URL`, `SERVER_INTERNAL_URL` and `WORKER_SHARED_SECRET` by `scripts/start.sh` and
