@@ -69,6 +69,7 @@ function AuditPage() {
   const nameFor = useBotNames();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportCapped, setExportCapped] = useState<number | null>(null);
 
   /*
    * The same filtered query as the table, downloaded as a file. The server walks every
@@ -79,10 +80,14 @@ function AuditPage() {
     if (exporting) return;
     setExporting(true);
     setExportError(null);
+    setExportCapped(null);
     try {
       const response = await client(auditExportUrl(search), {
         fallback: "Could not export audit events",
       });
+      // A file that stopped early must say so, or it reads as the whole trail.
+      const capped = Number(response.headers.get("x-audit-export-truncated"));
+      if (Number.isInteger(capped) && capped > 0) setExportCapped(capped);
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -151,6 +156,12 @@ function AuditPage() {
         {exportError ? (
           <p className="mt-4 text-destructive text-sm" role="alert">
             {exportError}
+          </p>
+        ) : null}
+        {exportCapped ? (
+          <p className="mt-4 text-muted-foreground text-sm" role="status">
+            The file holds the newest {exportCapped.toLocaleString()} events,
+            not all of them. Narrow the filter or the dates to export the rest.
           </p>
         ) : null}
         {events.isPending ? null : events.isError ? (

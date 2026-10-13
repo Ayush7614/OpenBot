@@ -369,6 +369,11 @@ export const auditEventTypes = [
   "person.access_revoked",
   "person.access_restored",
   /*
+   * An administrator took the trail out as a file. The trail is evidence, so who copied how much of
+   * it, under which filter, belongs on it too.
+   */
+  "audit.exported",
+  /*
    * Getting in, and being turned away.
    *
    * The trail had nothing about sign-in at all, which left two questions unanswerable. Anybody who
@@ -1030,16 +1035,26 @@ export const AUDIT_EXPORT_COLUMNS = [
   "payload",
 ] as const;
 
+/**
+ * One CSV cell.
+ *
+ * A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` (or a tab or carriage return
+ * ahead of one) as a formula, and audit rows carry text people and Bots control: names, URLs,
+ * target IDs. Such a cell is prefixed with `'` so it opens as the text it is (OWASP's CSV injection
+ * guidance). JSON payloads start with `{` and timestamps and IDs with a digit or letter, so nothing
+ * the trail itself writes is changed.
+ */
 function toCsvCell(value: string): string {
+  const text = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   if (
-    value.includes('"') ||
-    value.includes(",") ||
-    value.includes("\n") ||
-    value.includes("\r")
+    text.includes('"') ||
+    text.includes(",") ||
+    text.includes("\n") ||
+    text.includes("\r")
   ) {
-    return `"${value.replaceAll('"', '""')}"`;
+    return `"${text.replaceAll('"', '""')}"`;
   }
-  return value;
+  return text;
 }
 
 function auditEventToCsvRow(event: AuditEvent): string {

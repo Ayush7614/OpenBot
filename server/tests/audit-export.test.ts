@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { createApp } from "../src/app";
 import {
   AUDIT_EXPORT_COLUMNS,
+  AUDIT_EXPORT_MAX_ROWS,
   type AuditEvent,
+  type AuditEventInput,
   type AuditEventQuery,
   type AuditReader,
+  type AuditStore,
   auditEventsToCsv,
   readAuditExportRows,
 } from "../src/audit";
@@ -58,10 +61,52 @@ const readerOf = (pages: { events: AuditEvent[]; nextCursor?: string }[]) => {
   return { reader, seen };
 };
 
-const appWith = (reader: AuditReader) =>
-  createApp(config, adminAuth, { rolesForUser: async () => ["admin"] }, reader);
+const appWith = (reader: AuditReader, store?: AuditStore) =>
+  createApp(
+    config,
+    adminAuth,
+    { rolesForUser: async () => ["admin"] },
+    reader,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    store,
+  );
+
+const storeOf = () => {
+  const recorded: AuditEventInput[] = [];
+  const store: AuditStore = {
+    insert: async (input) => {
+      recorded.push(input);
+    },
+  };
+  return { store, recorded };
+};
 
 describe("auditEventsToCsv", () => {
+  // Text people and Bots control opens in a spreadsheet as text, never as a formula.
+  test("a cell a spreadsheet would run as a formula is neutralised", () => {
+    const csv = auditEventsToCsv([
+      event({
+        targetId: '=HYPERLINK("https://example.test","x")',
+        actorUserId: "@admin",
+        payload: { bot: "+cmd", decision: { allowed: true, rule: "-1+1" } },
+      }),
+    ]);
+    const row = csv.split("\n")[1] as string;
+    expect(row).toContain(`"'=HYPERLINK(""https://example.test"",""x"")"`);
+    expect(row).toContain(",'@admin,");
+    expect(row).toContain(",'-1+1,'+cmd,");
+    // What the trail writes itself is left alone: the ID, the time and the JSON payload.
+    expect(row.startsWith("6f1b7f28-")).toBe(true);
+    expect(row).toContain(",2026-08-13T12:00:00.000Z,");
+  });
+
   test("an empty trail is a header, so an empty export still opens as a table", () => {
     expect(auditEventsToCsv([])).toBe(`${AUDIT_EXPORT_COLUMNS.join(",")}\n`);
   });
@@ -170,23 +215,68 @@ describe("GET /api/admin/audit-events?format=csv", () => {
   });
 
   test("a truncated export names it in a header instead of looking complete", async () => {
-    const many = Array.from({ length: 600 }, (_, index) =>
-      event({
-        id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-      }),
+    const page = (start: number, next?: string) => ({
+      events: Array.from({ length: 500 }, (_, index) =>
+        event({
+          id: `00000000-0000-4000-8000-${String(start + index).padStart(12, "0")}`,
+        }),
+      ),
+      nextCursor: next,
+    });
+    // Eleven full pages: one more than the cap holds.
+    const { reader } = readerOf(
+      Array.from({ length: 11 }, (_, index) =>
+        page(index * 500, index < 10 ? `page-${index + 2}` : undefined),
+      ),
     );
-    const { reader } = readerOf([
-      { events: many.slice(0, 500), nextCursor: "page-2" },
-      { events: many.slice(500), nextCursor: "page-3" },
-      { events: [], nextCursor: undefined },
-    ]);
-    // Walk the real collector path at a small cap through the route's pages is
-    // covered above; here the route streams its default cap without truncation.
-    const response = await appWith(reader).request(
+    const capped = await appWith(reader).request(
       "http://openbot.local/api/admin/audit-events?format=csv",
     );
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-audit-export-truncated")).toBeNull();
+    expect(capped.status).toBe(200);
+    expect(capped.headers.get("x-audit-export-truncated")).toBe(
+      String(AUDIT_EXPORT_MAX_ROWS),
+    );
+    expect((await capped.text()).trim().split("\n")).toHaveLength(
+      AUDIT_EXPORT_MAX_ROWS + 1,
+    );
+
+    const { reader: small } = readerOf([{ events: [event()] }]);
+    const whole = await appWith(small).request(
+      "http://openbot.local/api/admin/audit-events?format=csv",
+    );
+    expect(whole.headers.get("x-audit-export-truncated")).toBeNull();
+  });
+
+  test("taking the trail out is itself on the trail, with who, how much and which filter", async () => {
+    const { reader } = readerOf([{ events: [event(), event()] }]);
+    const { store, recorded } = storeOf();
+    await appWith(reader, store).request(
+      "http://openbot.local/api/admin/audit-events?format=csv&eventType=computer.action_allowed&limit=5",
+    );
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      eventType: "audit.exported",
+      targetType: "audit_trail",
+      actorUserId: "admin",
+      payload: {
+        format: "csv",
+        rows: 2,
+        truncated: false,
+        filters: { eventType: "computer.action_allowed" },
+      },
+    });
+    // Paging belongs to the table, not the export, so it is not part of what was taken.
+    const [exported] = recorded;
+    expect(
+      (exported?.payload as { filters?: Record<string, unknown> } | undefined)
+        ?.filters,
+    ).not.toHaveProperty("limit");
+
+    // Reading the table is not an export.
+    await appWith(reader, store).request(
+      "http://openbot.local/api/admin/audit-events",
+    );
+    expect(recorded).toHaveLength(1);
   });
 
   test("an unknown format is a 400 naming the parameter", async () => {

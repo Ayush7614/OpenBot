@@ -873,17 +873,24 @@ export function createApp(
           auditReader,
           query,
         );
+        if (auditStore) {
+          const { cursor: _cursor, limit: _limit, ...filters } = query;
+          await recordAuditEvent(auditStore, {
+            eventType: "audit.exported",
+            targetType: "audit_trail",
+            actorUserId: context.var.actor.id,
+            payload: { format: "csv", rows: events.length, truncated, filters },
+          });
+        }
         const day = new Date().toISOString().slice(0, 10);
         context.header("Content-Type", "text/csv; charset=utf-8");
         context.header(
           "Content-Disposition",
           `attachment; filename="audit-events-${day}.csv"`,
         );
+        // The row count it stopped at, so the page can say how much the file holds.
         if (truncated) {
-          context.header(
-            "X-Audit-Export-Truncated",
-            "true; narrow from/to or a filter to export the full range",
-          );
+          context.header("X-Audit-Export-Truncated", String(events.length));
         }
         return context.body(auditEventsToCsv(events));
       }

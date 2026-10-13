@@ -131,9 +131,12 @@ model supplies any arguments, and the gateway writes that run's initiator on eve
 The Audit screen's **Export CSV** downloads the current filter as
 `GET /api/admin/audit-events?format=csv`: the same filtered query as the table, walked page by
 page up to 5,000 rows and returned as RFC 4180 CSV with the redacted payload as one JSON column.
-An export that hits the cap answers with `X-Audit-Export-Truncated`, so a reviewer narrows
-`from`/`to` or a filter instead of citing a partial trail. An unknown `format` is a 400, like any
-other malformed audit query.
+An export that hits the cap holds the newest 5,000 and answers with `X-Audit-Export-Truncated`
+(the row count), and the screen says so, so a reviewer narrows `from`/`to` or a filter instead of
+citing a partial trail. A cell that starts with `=`, `+`, `-` or `@` is prefixed with `'`, so a
+name or URL somebody chose opens in a spreadsheet as text, never as a formula. Every export is
+itself recorded as `audit.exported`, with who took it, how many rows, and under which filter. An
+unknown `format` is a 400, like any other malformed audit query.
 
 ## Human control and secrets
 
