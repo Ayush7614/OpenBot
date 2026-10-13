@@ -82,6 +82,8 @@ import { createTranscriptionProvider } from "./dictation/provider";
 import { createDictationRoutes } from "./dictation/routes";
 import type { HostAccessBroker } from "./host-access/broker";
 import { createHostAccessRoutes } from "./host-access/routes";
+import { identityRoutes } from "./identity/routes";
+import type { IdentityStore } from "./identity/store";
 import { createIntelligenceClient } from "./intelligence-client";
 import {
   createLearningRoutes,
@@ -95,8 +97,11 @@ import { createPasswordRoutes, createSignInRoutes } from "./passwords/routes";
 import type { SignInService } from "./passwords/service";
 import type { OnboardingStore } from "./people/onboarding";
 import { MAX_PAGE, type PeopleStore } from "./people/store";
+import type { AccountModeSwitch } from "./plugins/account-mode";
 import type { ComposioBroker } from "./plugins/broker";
 import { createPluginRoutes } from "./plugins/routes";
+import { createSharedUseRoutes } from "./plugins/shared-use-routes";
+import type { SharedUseStore } from "./plugins/shared-use-store";
 import {
   isDeploymentFault,
   PluginRefusedError,
@@ -135,6 +140,10 @@ import { userPreferencesRoutes } from "./user-preferences-routes";
 import { createVoiceProvider } from "./voice/provider";
 import { createVoiceRoutes } from "./voice/routes";
 import type { VoiceSessionServices } from "./voice/session-routes";
+import {
+  DIRECTORY_PATH as WEB_BOT_AUTH_DIRECTORY_PATH,
+  directoryResponse as webBotAuthDirectory,
+} from "./web-bot-auth";
 
 /**
  * How much of a multipart body is boundary, headers and other fields rather than file.
@@ -389,6 +398,17 @@ export function createApp(
       recorder: DemonstrationRecorder;
     };
     approvals?: ApprovalService;
+    /**
+     * Shared apps: who may use an app's one team account, and the switch that makes an app Shared.
+     *
+     * A field here rather than another positional parameter. Everything from `auditReader` on is
+     * optional and positional, so a 37th argument is one an caller can misplace silently — the trap
+     * `composio` and `connect` are both commented for. One object carries both halves because every
+     * surface that needs one needs the other: the plugin routes switch modes and record approvals,
+     * the approvals inbox answers requests, and publishing or assigning a Bot re-checks what it was
+     * approved for. Absent, none of those surfaces exists — and nothing can turn an app Shared.
+     */
+    shared?: { modes: AccountModeSwitch; use: SharedUseStore };
     /** The private sign-in form and the Passwords vault. See passwords/service.ts. */
     passwords?: SignInService;
     delivery?: {
@@ -423,12 +443,24 @@ export function createApp(
    * resolver still answers from `config.selfHostBanner` rather than asking the network.
    */
   selfHostBanner?: SelfHostBanner,
+  /** A person's own linked accounts. Absent answers 503 on /api/identity. */
+  identity?: IdentityStore,
+  /** The GitHub sign-in callback, built by the caller; mounted behind requireUser ahead of /api/identity. */
+  identityGithubCallback?: Hono<{ Variables: AppVariables }>,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
   mountDesktopConnectionFailure(app, desktopHostToken);
   mountProviderOAuthProxy(app, modelProviderProxy);
 
   app.get("/health", (context) => context.json({ status: "ok" }));
+  // The public key Bots' browsers sign their requests with, where Cloudflare and any other verifier
+  // look for it. Public by design, and absent when Web Bot Auth is off. See web-bot-auth.ts.
+  const webBotAuth = config.webBotAuth;
+  if (webBotAuth) {
+    app.get(WEB_BOT_AUTH_DIRECTORY_PATH, (context) =>
+      webBotAuthDirectory(context.req.raw, webBotAuth),
+    );
+  }
   // Projected, never the raw runtime. config.runtime carries the Intelligence contract, including
   // INTELLIGENCE_API_KEY and the licence token, and this endpoint is reachable by anyone. Returning
   // the object wholesale would serve deployment secrets to the browser. Add fields here explicitly.
@@ -677,6 +709,41 @@ export function createApp(
   app.route(
     "/api/settings/preferences",
     userPreferencesRoutes(requireUser, userPreferences),
+  );
+
+  /*
+   * The session must match the sealed state's person, otherwise a link started by one person could
+   * attach another person's GitHub account (login CSRF), so the callback requires the same session
+   * as the rest of /api/identity; a missing session answers 401 rather than a redirect. Mounted
+   * before the identity router so that router never sees a GET to this path; other methods fall
+   * through to it and get its own 401/404.
+   */
+  if (identityGithubCallback) {
+    app.use("/api/identity/github/callback", requireUser);
+    app.route("/api/identity/github/callback", identityGithubCallback);
+  }
+  /*
+   * A person's own linked accounts at outside providers (Slack, GitHub). Theirs alone: there is no
+   * administrator view and no linking on somebody else's behalf. A provider is offered only when
+   * its return path is wired: Slack needs the identity redeemer for the codes it issues, and GitHub
+   * needs the callback mounted above, otherwise people would be sent away and back to nothing.
+   */
+  app.route(
+    "/api/identity",
+    identityRoutes(requireUser, identity, auditStore, {
+      slackLinking: Boolean(
+        coworker?.delivery?.webhooks.slack &&
+          coworker.delivery.webhooks.identity,
+      ),
+      github:
+        identityGithubCallback && config.githubApp && config.publicUrl
+          ? {
+              clientId: config.githubApp.clientId,
+              publicUrl: config.publicUrl,
+              encryptionKey: config.keyEncryptionKey,
+            }
+          : undefined,
+    }),
   );
 
   app.get("/api/settings/instructions", requireUser, async (context) => {
@@ -1370,6 +1437,7 @@ export function createApp(
         // The managed Bot's address, so a coworker created without an endpoint — which creation
         // stores as running at this address — can be told apart from one a person hosts.
         config.managedAgent?.endpoint?.toString(),
+        coworker?.shared?.use,
       ),
     );
     // Choosing a coworker for an untagged message needs the same permission-filtered roster the
@@ -1517,7 +1585,17 @@ export function createApp(
   if (coworker?.teamBots)
     app.route(
       "/api/team-bots",
-      createTeamBotRoutes(coworker.teamBots, requireUser),
+      createTeamBotRoutes(coworker.teamBots, requireUser, coworker.shared?.use),
+    );
+  /*
+   * BEFORE `/api/approvals`, which would otherwise take every path under it and answer 404 for
+   * these. Needs the trail as well as the store: approving a Bot's use of a team account is a
+   * decision somebody must be able to find later.
+   */
+  if (coworker?.shared && auditStore)
+    app.route(
+      "/api/approvals/shared-use",
+      createSharedUseRoutes(coworker.shared.use, requireUser, auditStore),
     );
   if (coworker?.approvals)
     app.route(
@@ -1567,6 +1645,7 @@ export function createApp(
         requireUser,
         bindings,
         coworker.responsibilities.triggers,
+        coworker.shared?.use,
       ),
     );
     if (coworker.responsibilities.triggers) {
@@ -1637,6 +1716,7 @@ export function createApp(
           appUrl: config.appUrl,
         },
         composio,
+        coworker?.shared,
       ),
     );
   }

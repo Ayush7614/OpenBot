@@ -234,6 +234,15 @@ export const auditEventTypes = [
    * while the grant at Google stood untouched.
    */
   "mcp.account_disconnected",
+  // An administrator switched a brokered app between each person's account and one shared account.
+  "mcp.account_mode_changed",
+  // A Bot's use of a Shared app needs an administrator's approval: filed by a refused call or by the
+  // Bot's owner.
+  "shared_use.requested",
+  // An administrator answered a request to use a Shared app through a Bot.
+  "shared_use.approved",
+  // An administrator answered a request to use a Shared app through a Bot.
+  "shared_use.declined",
   // Every action a Bot takes on its computer, allowed or refused. Both, always: a trail that records
   // only what was permitted cannot answer whether the Bot tried.
   "computer.action_allowed",
@@ -511,6 +520,24 @@ export const auditEventTypes = [
   /* A Bot connected to, or disconnected from, a Slack, Teams or SMS conversation. */
   "delivery.linked",
   "delivery.unlinked",
+  /*
+   * A person linking an outside account to themselves (a Slack link code, a GitHub sign-in). Target
+   * the link id; payload `actor` and `provider` only, never the subject, realm or credential id.
+   */
+  "identity.linked",
+  /*
+   * A person removing their own link to an outside account (Slack, GitHub). The link and its stored
+   * token go here; nothing is changed at the provider.
+   */
+  "identity.unlinked",
+  /*
+   * A removed person's linked account retired by the removal: marked `needs_reconnect`, its stored
+   * token (if any) revoked here. Target the link id; payload `actor` (the remover, not always a user
+   * id, so never `actorUserId`), `owner` (the removed person), `provider`, `reason`
+   * ("person_removed") and `credentialRevoked` (whether this removal revoked a live token). Never the
+   * subject, realm or credential id.
+   */
+  "identity.link_retired",
   /* Routines, however they were made: by a person on the screen or by a Bot through its tools. */
   "routine.created",
   "routine.updated",
@@ -529,12 +556,32 @@ export type AuditInitiator =
   | { kind: "routine"; id: string }
   | { kind: "responsibility"; id: string }
   | { kind: "memory"; id: string }
-  | { kind: "handoff"; id: string };
+  | { kind: "handoff"; id: string; origin?: AuditInitiator };
 
 export const PERSON_INITIATOR: AuditInitiator = { kind: "person" };
 
 /** The deployment acting as itself: at start-up, or refusing a caller it could not identify. */
 export const DEPLOYMENT_INITIATOR: AuditInitiator = { kind: "deployment" };
+
+/**
+ * The initiator a hop from `fromBotId` runs under.
+ *
+ * `origin` IS ALWAYS THE ROOT — what started the first run in the chain — and never another hop, so
+ * a check that needs to know who is steering reads one field however deep the chain is. A source
+ * that is itself a hop with no origin passes none on: an origin made up here would be read as fact.
+ */
+export function handoffInitiator(
+  fromBotId: string,
+  source: AuditInitiator | undefined,
+): AuditInitiator {
+  const root = source ?? PERSON_INITIATOR;
+  if (root.kind === "handoff") {
+    return root.origin
+      ? { kind: "handoff", id: fromBotId, origin: root.origin }
+      : { kind: "handoff", id: fromBotId };
+  }
+  return { kind: "handoff", id: fromBotId, origin: root };
+}
 
 /*
  * The vocabulary, kept as the declaration of what a row's `initiator_kind` can be.

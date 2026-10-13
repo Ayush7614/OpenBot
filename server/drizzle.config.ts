@@ -29,6 +29,7 @@ export default defineConfig({
     "./src/db/schema/responsibilities.ts",
     "./src/db/schema/approvals.ts",
     "./src/db/schema/memory.ts",
+    "./src/db/schema/defaults.ts",
     "./src/db/schema/proactive.ts",
     "./src/db/schema/demonstrations.ts",
     "./src/db/schema/delivery.ts",
@@ -38,6 +39,8 @@ export default defineConfig({
     "./src/db/schema/lifecycle.ts",
     "./src/db/schema/passwords.ts",
     "./src/db/schema/team-bots.ts",
+    "./src/db/schema/shared-use.ts",
+    "./src/db/schema/identity.ts",
   ],
   out: "./drizzle",
   dbCredentials: {
